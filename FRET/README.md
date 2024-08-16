@@ -1,5 +1,5 @@
 # FRET: Feature Redundancy Elimination for Test Time Adaptation
-__This repo is officical PyTorch implement of 'Feature Redundancy Elimination for Test Time Adaptation'  by Linjing You,Jiabao Lu,Yaming Huang,Yaozu Liu,Zhiyi Yang,Xiayuan Huang.__  
+__This repo is officical PyTorch implement of 'Feature Redundancy Elimination for Test Time Adaptation'.__  
 This codebase is mainly based on [TSD](https://github.com/matsuolab/T3A) and [AETTA](https://github.com/taeckyung/AETTA).  
 ## Dependence
 We use `python==3.8.13`, other packages including:
