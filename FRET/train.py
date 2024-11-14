@@ -4,6 +4,7 @@ import sys
 import time
 import numpy as np
 import argparse
+import timm
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.models as models
@@ -107,23 +108,33 @@ if __name__ == '__main__':
     opt = get_optimizer(algorithm, args)
     sch = get_scheduler(opt, args)
     
-    if args.dataset in ['CIFAR-10', 'CIFAR-100', 'ImageNet']:
+    if args.dataset in ['CIFAR-10', 'CIFAR-100']:
         class Divided_module(nn.Module):
             def __init__(self, args):
                 super(Divided_module, self).__init__()
                 self.args = args
                 self.algorithm_res = self._load_algorithm()
-                num_ftrs = self.algorithm_res.fc.in_features
-                self.algorithm_res.fc = nn.Linear(num_ftrs, args.num_classes)
-                self.featurizer = nn.Sequential(*list(self.algorithm_res.children())[:-1],nn.Flatten())
-                self.classifier = nn.Linear(self.algorithm_res.fc.in_features, self.args.num_classes)
+                if 'ViT' in self.args.net:
+                    self.algorithm_res.head = nn.Identity()    
+                    dummy_input = torch.zeros(1, 3, 224, 224)  
+                    output = self.algorithm_res(dummy_input)   
+                    self.num_ftrs = output.shape[1]    
+                    self.featurizer = nn.Sequential(self.algorithm_res, nn.Flatten()) 
+                else:
+                    self.num_ftrs = self.algorithm_res.fc.in_features  
+                    self.algorithm_res.fc = nn.Linear(self.num_ftrs, args.num_classes) 
+                    self.featurizer = nn.Sequential(*list(self.algorithm_res.children())[:-1],nn.Flatten())
+
+                self.classifier = nn.Linear(self.num_ftrs, self.args.num_classes)
                 self.network = nn.Sequential(self.featurizer, self.classifier)
-            
+                
             def _load_algorithm(self):
                 if self.args.net == 'resnet50':
                     return models.resnet50()
                 elif self.args.net == 'resnet18':
                     return models.resnet18()
+                elif self.args.net == 'ViT-B16':
+                    return timm.create_model('vit_base_patch16_224_in21k',pretrained=True,num_classes=0)
                 else:
                     print('Net selected wrong!')
                     return None
@@ -153,7 +164,7 @@ if __name__ == '__main__':
     print('===========start training===========')
     sss = time.time()
     for epoch in range(args.max_epoch):
-        if args.dataset in ['CIFAR-10', 'CIFAR-100', 'ImageNet']:
+        if args.dataset in ['CIFAR-10', 'CIFAR-100']:
             running_loss = 0.0
             for i, data in enumerate(train_loaders, 0):
                 inputs, labels = data[0].to(device_C), data[1].to(device_C)
@@ -179,13 +190,13 @@ if __name__ == '__main__':
             print('===========epoch %d===========' % (epoch))
             s = ''
             for item in loss_list:
-                if args.dataset in ['CIFAR-10', 'CIFAR-100', 'ImageNet']:
+                if args.dataset in ['CIFAR-10', 'CIFAR-100']:
                     s += (item+'_loss:%.4f,' % step_vals)
                 else:
                     s += (item+'_loss:%.4f,' % step_vals[item])
             print(s[:-1])
             s = ''
-            if args.dataset in ['CIFAR-10', 'CIFAR-100', 'ImageNet']:
+            if args.dataset in ['CIFAR-10', 'CIFAR-100']:
                 acc_record['valid'] = np.mean(np.array(modelopera.accuracy_C(algorithm, eval_loaders)))
                 s += ('valid'+'_acc:%.4f,' % acc_record['valid'])
                 if acc_record['valid'] > best_valid_acc:

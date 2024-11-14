@@ -117,6 +117,10 @@ def img_param_init(args):
             args.input_shape = (3, 32, 32)
             args.num_classes = 100
             return args
+        if dataset=='ImageNet':
+            args.input_shape = (3, 224, 224)
+            args.num_classes = 1000
+            return args
     else:
         if dataset == 'office':
             domains = ['amazon', 'dslr', 'webcam']

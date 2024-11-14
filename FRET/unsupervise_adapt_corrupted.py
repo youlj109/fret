@@ -4,6 +4,8 @@ import os
 import sys
 import numpy as np
 import math
+import timm
+import torchvision.datasets as datasets
 import torchvision.models as models
 import torch
 import torch.nn as nn
@@ -13,13 +15,13 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 from sklearn.metrics import confusion_matrix
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset,SubsetRandomSampler
 from alg.opt import *
 from alg import alg
 from utils.util import (set_random_seed, save_checkpoint, print_args,
                         train_valid_target_eval_names,alg_loss_dict,                        
                         Tee, img_param_init, print_environ, load_ckpt)
-from adapt_algorithm import collect_params,configure_model
+from adapt_algorithm import collect_params,configure_model,collect_params_sar
 from adapt_algorithm import PseudoLabel,T3A,BN,ERM,Tent,TSD,Energy,SAR,SAM,EATA,TIPI,FRET
 
 def get_args():
@@ -91,16 +93,15 @@ def get_args():
     parser.add_argument('--algorithm', type=str, default="ERM")
     parser.add_argument('--batch_size', type=int,
                         default=128, help='batch_size of **test** time')
-    parser.add_argument('--dataset', type=str, default='PACS',help='office-home,PACS,VLCS,DomainNet')
-    parser.add_argument('--data_dir', type=str, default='/home/wangshuai/data/PACS', help='data dir')
+    parser.add_argument('--dataset', type=str, default='CIFAR-10',help='CIFAR-10,CIFAR-100')
+    parser.add_argument('--data_dir', type=str, default='/root/dataset/CIFAR-10', help='data dir')
     parser.add_argument('--lr', type=float, default=1e-4, 
                          help="learning rate of **test** time adaptation,important")
-    parser.add_argument('--csv_dir', type=str, default='/root/TTA/TSD-master/code/Tem_output/Output',help='the direction of output csv')
     parser.add_argument('--net', type=str, default='resnet50',
                         help="featurizer: vgg16, resnet18,resnet50, resnet101,DTNBase,ViT-B16,resnext50")
     parser.add_argument('--test_envs', type=int, nargs='+',default=[0], help='target domains')
     parser.add_argument('--output', type=str,default="./tta_output", help='result output path')
-    parser.add_argument('--adapt_alg',type=str,default='T3A',help='[Tent,PL,PLC,SHOT-IM,T3A,BN,ETA,LAME,ERM,TSD]')
+    parser.add_argument('--adapt_alg',type=str,default='ERM',help='[Tent,ERM,PL,PLC,T3A,BN,ETA,EATA,SAR,FRET,ENERGY,TIPI,TSD]')
     parser.add_argument('--beta',type=float,default=0.9,help='threshold for pseudo label(PL)')
     parser.add_argument('--episodic',action='store_true',help='is episodic or not,default:False')
     parser.add_argument('--steps', type=int, default=1,help='steps of test time, default:1')
@@ -108,11 +109,12 @@ def get_args():
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--source_seed',type=int,default=0,help='source model seed')
     parser.add_argument('--update_param',type=str,default='all',help='all / affine / body / head')
-    #two hpyer-parameters for EATA (ICML22)
-    parser.add_argument('--e_margin', type=float, default=math.log(7)*0.40, help='entropy margin E_0 in Eqn. (3) for filtering reliable samples')
-    parser.add_argument('--d_margin', type=float, default=0.05, help='\epsilon in Eqn. (5) for filtering redundant samples')
     parser.add_argument('--pretrain_dir',type=str,default='./model.pkl',help='pre-train model path')      
     parser.add_argument('--ENERGY_cond',type=str,default='uncond',help='ENERGY_cond Parameter')
+    #hpyer-parameters for EATA (ICML22)
+    parser.add_argument('--e_margin', type=float, default=math.log(7)*0.40, help='entropy margin E_0 in Eqn. (3) for filtering reliable samples')
+    parser.add_argument('--d_margin', type=float, default=0.05, help='\epsilon in Eqn. (5) for filtering redundant samples')
+    
     args = parser.parse_args()
     args.steps_per_epoch = 100
     args.data_dir = args.data_file+args.data_dir
@@ -134,23 +136,33 @@ if __name__ == '__main__':
     pretrain_model_path = args.pretrain_dir
     set_random_seed(args.seed)
     
-    if args.dataset in ['CIFAR-10', 'CIFAR-100', 'ImageNet']:
+    if args.dataset in ['CIFAR-10', 'CIFAR-100']:
         class Divided_module(nn.Module):
             def __init__(self, args):
                 super(Divided_module, self).__init__()
                 self.args = args
                 self.algorithm_res = self._load_algorithm()
-                num_ftrs = self.algorithm_res.fc.in_features
-                self.algorithm_res.fc = nn.Linear(num_ftrs, args.num_classes)
-                self.featurizer = nn.Sequential(*list(self.algorithm_res.children())[:-1],nn.Flatten())
-                self.classifier = nn.Linear(self.algorithm_res.fc.in_features, self.args.num_classes)
+                if 'ViT' in self.args.net:
+                    self.algorithm_res.head = nn.Identity()       
+                    dummy_input = torch.zeros(1, 3, 224, 224)  
+                    output = self.algorithm_res(dummy_input)   
+                    self.num_ftrs = output.shape[1]         
+                    self.featurizer = nn.Sequential(self.algorithm_res, nn.Flatten()) 
+                else:
+                    self.num_ftrs = self.algorithm_res.fc.in_features 
+                    self.algorithm_res.fc = nn.Linear(self.num_ftrs, args.num_classes) 
+                    self.featurizer = nn.Sequential(*list(self.algorithm_res.children())[:-1],nn.Flatten())
+
+                self.classifier = nn.Linear(self.num_ftrs, self.args.num_classes)
                 self.network = nn.Sequential(self.featurizer, self.classifier)
-            
+                
             def _load_algorithm(self):
                 if self.args.net == 'resnet50':
                     return models.resnet50()
                 elif self.args.net == 'resnet18':
                     return models.resnet18()
+                elif self.args.net == 'ViT-B16':
+                    return timm.create_model('vit_base_patch16_224_in21k',pretrained=True,num_classes=0)
                 else:
                     print('Net selected wrong!')
                     return None
@@ -192,17 +204,57 @@ if __name__ == '__main__':
         adapt_model = FRET(algorithm,optimizer,lam=[args.lam_FRET1,args.lam_FRET2,args.lam_FRET3],
                            filter_K=args.filter_K,k=args.FRET_K,label_consistance=args.label_consistance)
     elif args.adapt_alg=='ENERGY':
-        optimizer = torch.optim.Adam(algorithm.parameters(),lr=args.lr)
+        algorithm = configure_model(algorithm)
+        params,_ = collect_params(algorithm)
+        optimizer = torch.optim.Adam(params,lr=args.lr)
         adapt_model = Energy(algorithm,optimizer,steps=args.steps,episodic=args.episodic,
                             im_sz=224,n_ch=3,buffer_size=args.batch_size,n_classes=args.num_classes,
                             sgld_steps=20, sgld_lr=1, sgld_std=0.01, reinit_freq=0.05,
-                            if_cond=args.ENERGY_cond) 
+                            if_cond=args.ENERGY_cond)
     elif args.adapt_alg=='SAR':
-        optimizer = SAM(algorithm.parameters(),torch.optim.SGD,lr=args.lr, momentum=0.9)
+        algorithm = configure_model(algorithm)
+        params,_ = collect_params_sar(algorithm)
+        optimizer = SAM(params,torch.optim.SGD,lr=args.lr, momentum=0.9)
         adapt_model = SAR(algorithm, optimizer, steps=args.steps, episodic=args.episodic)
-    elif args.adapt_alg=='EATA':
-        optimizer = torch.optim.Adam(algorithm.parameters(),lr=args.lr)
+    elif args.adapt_alg=='ETA':
+        algorithm = configure_model(algorithm)
+        params,_ = collect_params(algorithm)
+        optimizer = torch.optim.Adam(params,lr=args.lr)
         adapt_model = EATA(algorithm, optimizer, steps=args.steps, episodic=args.episodic,fishers=None)
+    elif args.adapt_alg=='EATA':
+        if args.dataset in ['CIFAR-100']:
+            fisher_dataset = datasets.ImageFolder("/root/autodl-tmp/CIFAR100_original/train", transform=transforms.ToTensor())
+        elif args.dataset in ['CIFAR-10']:
+            fisher_dataset = datasets.ImageFolder("/root/autodl-tmp/CIFAR10_original/train", transform=transforms.ToTensor())
+        else : raise Exception("Do not support this fisher_dataset.")
+        sampled_indices = torch.randperm(len(fisher_dataset))[:args.fisher_size]
+        sampler = SubsetRandomSampler(sampled_indices)
+        fisher_loader = DataLoader(fisher_dataset, batch_size=args.batch_size * 2, sampler=sampler)
+        algorithm = configure_model(algorithm)
+        params, param_names = collect_params(algorithm)
+        ewc_optimizer = torch.optim.SGD(params, 0.001)
+        fishers = {}
+        train_loss_fn = nn.CrossEntropyLoss().cuda()
+        algorithm.cuda() 
+        for iter_, (images, targets) in enumerate(fisher_loader, start=1):
+            images, targets = images.cuda(), targets.cuda()
+            outputs = algorithm(images)
+            _, targets = outputs.max(1)
+            loss = train_loss_fn(outputs, targets)
+            loss.backward()
+            for name, param in algorithm.named_parameters():
+                if param.grad is not None:
+                    if iter_ > 1:
+                        fisher = param.grad.data.clone().detach() ** 2 + fishers[name][0]
+                    else:
+                        fisher = param.grad.data.clone().detach() ** 2
+                    if iter_ == len(fisher_loader):
+                        fisher = fisher / iter_
+                    fishers.update({name: [fisher, param.data.clone().detach()]})
+            ewc_optimizer.zero_grad()
+        del ewc_optimizer
+        optimizer = torch.optim.Adam(params,lr=args.lr)
+        adapt_model = EATA(algorithm, optimizer,steps=args.steps, episodic=args.episodic,fishers=fishers)
     elif args.adapt_alg=='TIPI':
         adapt_model = TIPI(algorithm,lr_per_sample=args.lr/args.batch_size, optim='Adam', epsilon=2/255,
                            random_init_adv=False,tent_coeff=4.0, use_test_bn_with_large_batches=True)
