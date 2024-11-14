@@ -10,6 +10,8 @@ from datautil.mydataloader import InfiniteDataLoader
 from PIL import Image
 import os
 from torchvision import transforms
+from torch.utils.data import ConcatDataset
+import torchvision.datasets as datasets
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
@@ -174,3 +176,18 @@ def get_train_validation_dataloader(args):
         shuffle=True)
     #testloader = DataLoader(testset,batch_size=args.batch_size,shuffle=True,num_workers=args.N_WORKERS,pin_memory=True)
     return validation_loaders
+
+def get_fisher_dataset(args):
+    names = args.img_dataset[args.dataset]
+    args.domain_num = len(names)
+
+    train_datasets = []
+    for i in range(len(names)):
+        if i not in args.test_envs:
+            train_dir = os.path.join(args.data_dir,names[i])
+            dataset = datasets.ImageFolder(train_dir, transform=transforms.Compose([transforms.Resize((224, 224)),
+                                                                transforms.ToTensor(),transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))]))
+            train_datasets.append(dataset)
+
+    fisher_dataset = ConcatDataset(train_datasets)
+    return fisher_dataset

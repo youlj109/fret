@@ -1,6 +1,6 @@
 # FRET: Feature Redundancy Elimination for Test Time Adaptation
-__This repo is officical PyTorch implement of 'Feature Redundancy Elimination for Test Time Adaptation' __  
-This codebase is mainly based on [TSD](https://github.com/matsuolab/T3A) and [AETTA](https://github.com/taeckyung/AETTA).  
+__This repo is officical PyTorch implement of 'Feature Redundancy Elimination for Test Time Adaptation'__  
+This codebase is mainly based on [TSD](https://github.com/SakurajimaMaiii/TSD) and [AETTA](https://github.com/taeckyung/AETTA).  
 ## Dependence
 We use `python==3.8.13`, other packages including:
 ```
@@ -41,6 +41,11 @@ To download the __CIFAR10/CIFAR10-C__ and __CIFAR100/CIFAR100-C__ datasets ,run 
 $. download_cifar10c.sh        #download CIFAR10/CIFAR10-C datasets
 $. download_cifar100c.sh       #download CIFAR100/CIFAR100-C datasets
 ```
+Also, you can download the __VLCS__, __DomainNet__, __ImageNet-C__ from the links below.  
+
+- VLCS: https://drive.google.com/uc?id=1skwblH1_okBwxWxmRsp9_qi15hyPpxg8
+- DomainNet: http://ai.bu.edu/M3SDA/
+- ImageNet-C: https://zenodo.org/record/2235448
 ## Train source model
 Please use `train.py` to train the source model. For example:
 ```
@@ -53,7 +58,7 @@ python train.py --dataset PACS \
                 --net resnet18 \
                 --test_envs 0  \
 ```
-Change `--dataset PACS` for other datasets, such as `office-home`, `CIFAR-10`, `CIFAR-100`.  
+Change `--dataset PACS` for other datasets, such as `office-home`,`VLCS`,`DomainNet`, `CIFAR-10`, `CIFAR-100`.  
 Set `--net` to use different backbones, such as `resnet50`, `ViT-B16`.  
 Set `--test_envs 0` to change the target domain.  
 For CIFAR-10 and CIFAR-100, there is no need to set the `--data_dir` and `--test_envs` .
