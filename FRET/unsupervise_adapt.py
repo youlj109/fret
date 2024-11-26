@@ -111,6 +111,7 @@ def get_args():
     parser.add_argument('--pretrain_dir',type=str,default='./model.pkl',help='pre-train model path')      
     parser.add_argument('--ENERGY_cond',type=str,default='uncond',help='ENERGY_cond Parameter')
     #hpyer-parameters for EATA (ICML22)
+    parser.add_argument("--fisher_size", default=2000, type=int)
     parser.add_argument('--e_margin', type=float, default=math.log(7)*0.40, help='entropy margin E_0 in Eqn. (3) for filtering reliable samples')
     parser.add_argument('--d_margin', type=float, default=0.05, help='\epsilon in Eqn. (5) for filtering redundant samples')
 
