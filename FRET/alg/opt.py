@@ -50,14 +50,11 @@ def get_optimizer(alg, args,inner=False, alias=True):
 
 def get_scheduler(optimizer, args):
     if not args.schuse:
-        print('未启用学习率调整器\t')
         return None
     if args.schusech == 'cos':
-        print('启用余弦退火学习率调整器\t')
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, args.max_epoch * args.steps_per_epoch)
     else:
-        print('启用lamdaLR学习率调整器\t')
         scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer, lambda x:  args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
     return scheduler

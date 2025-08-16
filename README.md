@@ -67,7 +67,7 @@ For domain datasets such as _PACS_ and _OfficeHome_, run the following code:
 ```
 python unsupervise_adapt.py --dataset PACS \
                             --data_dir your_data_dir \
-                            --adapt_alg FRET \ 
+                            --adapt_alg G-FRET \ 
                             --pretrain_dir your_pretrain_model_dir \
                             --lr 1e-4 \
                             --net resnet18 \
@@ -77,14 +77,14 @@ For corrupted datasets such as _CIFAR10-C_ and _CIFAR100-C_, run the following c
 ```
 python unsupervise_adapt_corrupted.py --dataset CIFAR-10 \
                                       --data_dir your_data_dir \
-                                      --adapt_alg FRET \ 
+                                      --adapt_alg G-FRET \ 
                                       --pretrain_dir your_pretrain_model_dir \
                                       --lr 1e-4 \
                                       --net resnet18
 ```
-Change `--adapt_alg FRET` to use different methods of test time adaptation, e.g. `TSD`, `BN`, `Tent`.  
+Change `--adapt_alg G-FRET` to use different methods of test time adaptation, e.g. `S-FRET`, `TSD`, `BN`, `Tent`.  
 `--pretrain_dir` denotes the path of source model, e.g. `./train_outputs/model.pkl`.  
-For FRET, we have set default parameters in our code. For better results, you might consider adjusting the parameters `--lam_FRET1`, `--lam_FRET2`, `--lam_FRET3`, `--filter_K`, and `--FRET_K`. For guidance on selecting hyperparameters, please refer to our paper.
+For G-FRET, we have set default parameters in our code. For better results, you might consider adjusting the parameters `--lam_GFRET`,`--filter_K`, and `--GFRET_K`. For guidance on selecting hyperparameters, please refer to our paper.
 ## Tested Environment
 We tested our code in the environment described below.
 ```

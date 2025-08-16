@@ -20,7 +20,7 @@ from utils.util import (set_random_seed, save_checkpoint, print_args,
                         train_valid_target_eval_names,alg_loss_dict,                        
                         Tee, img_param_init, print_environ, load_ckpt)
 from adapt_algorithm import collect_params,configure_model,collect_params_sar
-from adapt_algorithm import PseudoLabel,T3A,BN,ERM,Tent,TSD,Energy,SAR,SAM,EATA,TIPI,FRET
+from adapt_algorithm import PseudoLabel,T3A,BN,ERM,Tent,TSD,Energy,SAR,SAM,EATA,TIPI,SFRET,GFRET
 from datautil.getdataloader import get_fisher_dataset
 
 def get_args():
@@ -47,16 +47,12 @@ def get_args():
                         default=1e-2, help="learning rate used in MLDG")
     parser.add_argument('--lam', type=float,
                         default=1, help="tradeoff hyperparameter used in VREx")
-    parser.add_argument('--lam_FRET1', type=float,
-                        default=1e-4, help="tradeoff hyperparameter used in FRET")
-    parser.add_argument('--lam_FRET2', type=float,
-                        default=1e-6, help="tradeoff hyperparameter used in FRET")
-    parser.add_argument('--lam_FRET3', type=float,
-                        default=1e-4, help="tradeoff hyperparameter used in FRET")
-    parser.add_argument('--FRET_K', type=float,
-                        default=1, help="filter hyperparameter used in FRET")
+    parser.add_argument('--lam_GFRET', type=float,
+                        default=100, help="tradeoff hyperparameter used in G-FRET")
+    parser.add_argument('--GFRET_K', type=float,
+                        default=0.95, help="filter hyperparameter used in G-FRET")
     parser.add_argument('--label_consistance', type=bool,
-                        default=True, help="label_consistance hyperparameter used in FRET")
+                        default=True, help="label_consistance hyperparameter used in G-FRET")
     parser.add_argument('--lr_decay', type=float, default=0.75, help='for sgd')
     parser.add_argument('--lr_decay1', type=float,
                         default=1.0, help='for pretrained featurizer')
@@ -100,11 +96,11 @@ def get_args():
                         help="featurizer: vgg16,resnet18,resnet50,resnet101,DTNBase,ViT-B16,resnext50")
     parser.add_argument('--test_envs', type=int, nargs='+',default=[0], help='target domains')
     parser.add_argument('--output', type=str,default="./tta_output", help='result output path')
-    parser.add_argument('--adapt_alg',type=str,default='ERM',help='[Tent,ERM,PL,PLC,T3A,BN,ETA,EATA,SAR,FRET,ENERGY,TIPI,TSD]')
+    parser.add_argument('--adapt_alg',type=str,default='ERM',help='[Tent,ERM,PL,PLC,T3A,BN,ETA,EATA,SAR,S-FRET,G-FRET,ENERGY,TIPI,TSD]')
     parser.add_argument('--beta',type=float,default=0.9,help='threshold for pseudo label(PL)')
     parser.add_argument('--episodic',action='store_true',help='is episodic or not,default:False')
     parser.add_argument('--steps', type=int, default=1,help='steps of test time, default:1')
-    parser.add_argument('--filter_K',type=int,default=100,help='M in T3A/TSD/FRET, \in [1,5,20,50,100,200,300,-1],-1 denotes no selectiion')
+    parser.add_argument('--filter_K',type=int,default=100,help='M in T3A/TSD/G-FRET, \in [1,5,20,50,100,200,300,-1],-1 denotes no selectiion')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--source_seed',type=int,default=0,help='source model seed')
     parser.add_argument('--update_param',type=str,default='all',help='all / affine / body / head')
@@ -228,11 +224,19 @@ if __name__ == '__main__':
         adapt_model = T3A(algorithm,filter_K=args.filter_K,steps=args.steps, episodic=args.episodic)
     elif args.adapt_alg=='BN':
         adapt_model = BN(algorithm)  
-    elif args.adapt_alg=='FRET':
-        optimizer = torch.optim.Adam(algorithm.parameters(),lr=args.lr)
-        sum_params = sum([p.nelement() for p in algorithm.parameters()])
-        adapt_model = FRET(algorithm,optimizer,lam=[args.lam_FRET1,args.lam_FRET2,args.lam_FRET3],
-                           filter_K=args.filter_K,k=args.FRET_K,label_consistance=args.label_consistance)
+    elif args.adapt_alg=='S-FRET':
+        #optimizer = torch.optim.Adam(algorithm.parameters(),lr=args.lr)
+        algorithm = configure_model(algorithm)
+        params,_ = collect_params(algorithm)
+        optimizer = torch.optim.Adam(params,lr=args.lr) 
+        adapt_model = SFRET(algorithm,optimizer)
+    elif args.adapt_alg=='G-FRET':
+        #optimizer = torch.optim.Adam(algorithm.parameters(),lr=args.lr)
+        algorithm = configure_model(algorithm)
+        params,_ = collect_params(algorithm)
+        optimizer = torch.optim.Adam(params,lr=args.lr)   
+        adapt_model = GFRET(algorithm,optimizer,lam_GFRET=args.lam_GFRET,filter_K=args.filter_K
+                            ,GFRET_K=args.GFRET_K,label_consistance=args.label_consistance)
     elif args.adapt_alg=='ENERGY':
         algorithm = configure_model(algorithm)
         params,_ = collect_params(algorithm)
@@ -342,8 +346,6 @@ if __name__ == '__main__':
     print('\t Accuracy: %f' % float(avg_acc))
     print('\t Lr: {}'.format(args.lr))
     print('\t filter_K: {}'.format(args.filter_K))
-    print('\t FRET_K: {}'.format(args.FRET_K))
-    print('\t lam_FRET1: {}'.format(args.lam_FRET1))
-    print('\t lam_FRET2: {}'.format(args.lam_FRET2))
-    print('\t lam_FRET3: {}'.format(args.lam_FRET3))
+    print('\t GFRET_K: {}'.format(args.GFRET_K))
+    print('\t lam_GFRET: {}'.format(args.lam_GFRET))
     print('\t Cost time: %f s' %(time2-time1))

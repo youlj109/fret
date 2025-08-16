@@ -508,26 +508,22 @@ def soft_k_nearest_neighbors(features, features_bank, probs_bank):
     return pred_labels, pred_probs
 
 
-class FRET(nn.Module):
+class SFRET(nn.Module):
     """
     Feature Redundancy Elimination for Test Time Adaptation
     """
-    def __init__(self, model, optimizer, lam=[1,1,1], filter_K=100, k = 1, label_consistance=True):
+    def __init__(self, model, optimizer):
         super().__init__()
         self.model = model
         self.featurizer = model.featurizer
         self.classifier = model.classifier
         self.optimizer = optimizer
-        self.filter_K = filter_K
-        self.k = k
-        self.label_consistance = label_consistance
 
         if hasattr(self.classifier, 'fc') and hasattr(self.classifier.fc, 'weight'):
             warmup_supports = self.classifier.fc.weight.data.detach()
         else:
             warmup_supports = self.classifier.weight.data.detach()
         
-
         self.num_classes = warmup_supports.size()[0]
         self.warmup_supports = warmup_supports
         warmup_prob = self.classifier(self.warmup_supports)    
@@ -540,20 +536,71 @@ class FRET(nn.Module):
         self.ent = self.warmup_ent.data
         self.output_labels = self.warmup_labels.data
         self.output_scores = self.warmup_scores.data
-        self.lam = lam
+
+
+    def forward(self,x):
+        feature_embeddings = self.featurizer(x)
+
+        p = self.classifier(feature_embeddings)  
+         
+        norms = torch.norm(feature_embeddings, p=2, dim=0)
+        feature_data_standardized = feature_embeddings / norms
+
+        Convariance_Matrix = torch.abs(torch.matmul(feature_data_standardized.T,feature_data_standardized))
+
+        mean_value=torch.mean(Convariance_Matrix - torch.eye(Convariance_Matrix.shape[0], device=feature_embeddings.device))
+
+        loss = mean_value 
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
+        return p
+    
+
+class GFRET(nn.Module):
+    """
+    Graph convolutional network based Feature Redundancy Elimination for Test Time Adaptation
+    """
+    def __init__(self, model, optimizer, lam_GFRET=1e-4, filter_K=100, GFRET_K = 0.95, label_consistance=True):
+        super().__init__()
+        self.model = model
+        self.featurizer = model.featurizer
+        self.classifier = model.classifier
+        self.optimizer = optimizer
+        self.filter_K = filter_K
+        self.GFRET_K = GFRET_K
+        self.label_consistance = label_consistance
+
+        if hasattr(self.classifier, 'fc') and hasattr(self.classifier.fc, 'weight'):
+            warmup_supports = self.classifier.fc.weight.data.detach()
+        else:
+            warmup_supports = self.classifier.weight.data.detach()
+        
+        self.num_classes = warmup_supports.size()[0]
+        self.warmup_supports = warmup_supports
+        warmup_prob = self.classifier(self.warmup_supports)    
+        
+        self.warmup_ent = softmax_entropy(warmup_prob)  
+        self.warmup_labels = F.one_hot(warmup_prob.argmax(1), num_classes=self.num_classes).float() 
+        self.warmup_scores = F.softmax(warmup_prob,1)  
+                
+        self.supports = self.warmup_supports.data
+        self.ent = self.warmup_ent.data
+        self.output_labels = self.warmup_labels.data
+        self.output_scores = self.warmup_scores.data
+        self.lam_GFRET = lam_GFRET
 
 
     def forward(self,x):
         Device_ = x.device
-        x_augment = self.augment_image(x)
         feature_embeddings = self.featurizer(x)
-        faeture_embeddings_augment = self.featurizer(x_augment)
         feature_embeddings_positive, feature_embeddings_negative = self.Compute_presentation(feature_embeddings)
 
         p_positive = self.classifier(feature_embeddings_positive)
         p_negative = self.classifier(feature_embeddings_negative)
         p = self.classifier(feature_embeddings)    
-            
+        
         yhat = F.one_hot(p.argmax(1), num_classes=self.num_classes).float()
         ent = softmax_entropy(p)
         scores = F.softmax(p,1)
@@ -565,39 +612,28 @@ class FRET(nn.Module):
             self.output_scores = self.output_scores.to(Device_)       
             
             self.supports = torch.cat([self.supports,feature_embeddings])
-            self.output_labels = torch.cat([self.output_labels,yhat])
+            self.output_labels = torch.cat([self.output_labels,yhat]) 
             self.ent = torch.cat([self.ent,ent])
-            self.output_scores = torch.cat([self.output_scores,scores])
+            self.output_scores = torch.cat([self.output_scores,scores]) 
 
-            k = self.k
-            percentile_k_entropy = torch.quantile(softmax_entropy(scores), k)
+            GFRET_K = self.GFRET_K
+            percentile_k_entropy = torch.quantile(softmax_entropy(scores), GFRET_K)
 
             selected_indices = (softmax_entropy(scores) <= percentile_k_entropy).nonzero(as_tuple=True)[0]
-            suports_center = self.Compute_suports_center()
+
+            supports_center = self.Compute_suports_center()
             
-        Pseudo_label = self.Compute_pseudo_label(feature_embeddings, suports_center.T)
-
-
-        loss_pseudo_label_positive = self.pseudo_label_positive_loss(Pseudo_label = Pseudo_label[selected_indices], p_positive = p_positive[selected_indices], label_consistance=self.label_consistance)
-        loss_embeddings = self.feature_embedding_loss(feature_embeddings, faeture_embeddings_augment, feature_embeddings_negative, tau=1)
+        Pseudo_label = self.Compute_pseudo_label(feature_embeddings, supports_center.T)
+        loss_embeddings = self.feature_embedding_loss(feature_embeddings, supports_center.T, feature_embeddings_negative, yhat, tau=1)
         loss_pseudo_label_nagative = self.pseudo_label_negative_loss(Pseudo_label = Pseudo_label[selected_indices],p_positive = p_positive[selected_indices],p_negative = p_negative[selected_indices], label_consistance=self.label_consistance)
         loss_minimize_ent = self.ent_loss(Pseudo_label = Pseudo_label[selected_indices],p_positive = p_positive[selected_indices],scores = scores[selected_indices], label_consistance=self.label_consistance)
-        
-        loss = loss_pseudo_label_positive + self.lam[0]*loss_embeddings + self.lam[1]*loss_minimize_ent+  self.lam[2]*loss_pseudo_label_nagative
 
+        loss = loss_embeddings + self.lam_GFRET*(loss_minimize_ent + loss_pseudo_label_nagative)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
         
         return p
-    
-
-    
-    def augment_image(self, image):
-        transform = transforms.GaussianBlur(kernel_size=(3, 3))
-        augmented_image = transform(image)
-        return augmented_image
-    
     
     def Compute_presentation(self, X):
         X_norm = F.normalize(X, dim=0)
@@ -657,24 +693,28 @@ class FRET(nn.Module):
         supports_center = F.normalize(supports_center,1)
         Pseudo_label = X @ supports_center.T 
         return Pseudo_label
+    
+    def feature_embedding_loss(self, X, supports_center, X_negative, yhat, tau):
+        X = F.normalize(X, p=1, dim=1)
+        X_negative = F.normalize(X_negative, p=1, dim=1)
+        supports_center = F.normalize(supports_center, p=1, dim=1)
 
-    def feature_embedding_loss(self, X, X_positive, X_negative, tau):
-        X = F.normalize(X,1)
-        X_positive = F.normalize(X_positive,1)
-        X_negative = F.normalize(X_negative,1)
-        numerator_1 = torch.exp(F.cosine_similarity(X, X_positive) / tau)
-        fenmu_1 = torch.exp(F.cosine_similarity(X, X_negative) / tau) + numerator_1
-        loss = (-torch.log(numerator_1 / fenmu_1)).mean()
-        return loss
+        batch_size = X.size(0)
+        class_idx = torch.argmax(yhat, dim=1)
+        X_positive = supports_center[class_idx]
 
-    def pseudo_label_positive_loss(self, Pseudo_label, p_positive, label_consistance=True):
-        scores = F.softmax(p_positive, 1)
+        negative_centers = []
+        for i in range(batch_size):
+            other_centers = torch.cat([supports_center[:class_idx[i]], supports_center[class_idx[i]+1:]], dim=0)
+            negative_centers.append(other_centers)
+        negative_centers = torch.stack(negative_centers, dim=0)
+        negative_samples = torch.cat([X_negative.unsqueeze(1), negative_centers], dim=1)
 
-        if label_consistance==True:
-            indices = Pseudo_label.argmax(1) == scores.argmax(1)
-        else:
-            indices = torch.LongTensor(list(range(len(Pseudo_label))))        
-        loss = self.softmax_kl_loss(scores[indices].detach(),Pseudo_label[indices]).sum(1).mean(0)
+        numerator = torch.exp(F.cosine_similarity(X.unsqueeze(1), X_positive.unsqueeze(1), dim=2) / tau)
+        negative_similarities = F.cosine_similarity(X.unsqueeze(1), negative_samples, dim=2)
+        fenmu = torch.sum(torch.exp(negative_similarities / tau), dim=1, keepdim=True) + numerator
+
+        loss = (-torch.log(numerator / fenmu)).mean()
         return loss
     
     def softmax_kl_loss(self, input_logits, target_logits):
@@ -700,7 +740,6 @@ class FRET(nn.Module):
         
         label_p_negative = F.softmax(p_negative,1)
         loss = softmax_kl_loss(label_p_negative[indices].detach(),1-Pseudo_label[indices]).sum(1).mean(0)  
-
         
         return loss
     
@@ -712,7 +751,7 @@ class FRET(nn.Module):
 
         loss = softmax_entropy(scores[indices]).mean()        
         return loss
-
+    
 
 
 class EnergyModel(nn.Module):
